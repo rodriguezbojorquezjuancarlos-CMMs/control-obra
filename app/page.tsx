@@ -3,7 +3,10 @@
 
 import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
-import { Wallet, Hammer, Pickaxe, Receipt, Download, FileText, Image as ImageIcon, CheckCircle, Clock } from "lucide-react"
+import { Wallet, Hammer, Pickaxe, Receipt, Download, FileText, Image as ImageIcon, CheckCircle, Clock, Plus, X, Camera } from "lucide-react"
+import * as XLSX from 'xlsx'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
 export default function DashboardTijuana() {
   const [gastos, setGastos] = useState<any[]>([])
@@ -17,6 +20,14 @@ export default function DashboardTijuana() {
     miscelaneas: 0,
     pendientes: 0
   })
+
+  // Estados para la ventana Modal de Nuevo Gasto
+  const [mostrarModal, setMostrarModal] = useState(false)
+  const [nuevoConcepto, setNuevoConcepto] = useState("")
+  const [nuevoMonto, setNuevoMonto] = useState("")
+  const [nuevaCategoria, setNuevaCategoria] = useState("Materiales")
+  const [nuevoArchivo, setNuevoArchivo] = useState<File | null>(null)
+  const [guardandoGasto, setGuardandoGasto] = useState(false)
 
   useEffect(() => {
     cargarGastos()
@@ -49,7 +60,7 @@ export default function DashboardTijuana() {
     setCargando(false)
   }
 
-  // Función rápida para que Rafael apruebe los gastos con 1 clic
+  // Aprobar gastos del albañil
   const aprobarGasto = async (id: string) => {
     const { error } = await supabase
       .from("gastos_tijuana")
@@ -57,6 +68,96 @@ export default function DashboardTijuana() {
       .eq("id", id)
       
     if (!error) cargarGastos()
+  }
+
+  // Guardar gasto directo de Rafael (Se auto-aprueba)
+  const handleGuardarGasto = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!nuevoConcepto || !nuevoMonto) return
+    setGuardandoGasto(true)
+
+    try {
+      let evidenciaUrl = null
+
+      if (nuevoArchivo) {
+        const nombreArchivo = `${Date.now()}-${nuevoArchivo.name}`
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from("tickets_obra")
+          .upload(nombreArchivo, nuevoArchivo)
+
+        if (uploadError) throw uploadError
+
+        const { data: publicUrlData } = supabase.storage
+          .from("tickets_obra")
+          .getPublicUrl(nombreArchivo)
+
+        evidenciaUrl = publicUrlData.publicUrl
+      }
+
+      const { error: insertError } = await supabase
+        .from("gastos_tijuana")
+        .insert([{
+          concepto: nuevoConcepto,
+          monto: parseFloat(nuevoMonto),
+          categoria: nuevaCategoria,
+          evidencia_url: evidenciaUrl,
+          registrado_por: "Rafael Alvarez",
+          estatus: "Aprobado" // Automáticamente aprobado porque lo sube el dueño
+        }])
+
+      if (insertError) throw insertError
+
+      setMostrarModal(false)
+      setNuevoConcepto("")
+      setNuevoMonto("")
+      setNuevoArchivo(null)
+      cargarGastos() // Refrescar la tabla
+
+    } catch (err: any) {
+      alert("Error al registrar: " + err.message)
+    } finally {
+      setGuardandoGasto(false)
+    }
+  }
+
+  // Funciones de Exportación
+  const exportarExcel = () => {
+    const datosTabla = gastos.map(g => ({
+      Fecha: new Date(g.fecha).toLocaleDateString('es-MX'),
+      Concepto: g.concepto,
+      Categoría: g.categoria,
+      'Registrado por': g.registrado_por,
+      'Monto ($)': Number(g.monto),
+      Estatus: g.estatus
+    }))
+    const worksheet = XLSX.utils.json_to_sheet(datosTabla)
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Reporte Obra")
+    XLSX.writeFile(workbook, "Control_Financiero_Tijuana.xlsx")
+  }
+
+  const generarPDF = () => {
+    const doc = new jsPDF()
+    doc.text("Reporte Financiero - Obra Tijuana", 14, 15)
+    
+    const datosTabla = gastos.map(g => [
+      new Date(g.fecha).toLocaleDateString('es-MX'),
+      g.concepto,
+      g.categoria,
+      g.registrado_por,
+      `$${Number(g.monto).toLocaleString('es-MX')}`,
+      g.estatus
+    ])
+
+    autoTable(doc, {
+      head: [['Fecha', 'Concepto', 'Categoría', 'Registrado por', 'Monto', 'Estatus']],
+      body: datosTabla,
+      startY: 25,
+      theme: 'grid',
+      headStyles: { fillColor: [16, 185, 129] } // Verde esmeralda para el PDF
+    })
+    
+    doc.save("Control_Financiero_Tijuana.pdf")
   }
 
   // Porcentajes para la barra visual
@@ -81,10 +182,13 @@ export default function DashboardTijuana() {
         </div>
 
         <div className="flex flex-wrap gap-3 w-full md:w-auto">
-          <button className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-5 py-3 rounded-xl font-bold transition-colors border border-slate-700">
+          <button onClick={() => setMostrarModal(true)} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-3 rounded-xl font-bold transition-colors shadow-[0_0_20px_rgba(16,185,129,0.3)]">
+            <Plus size={18} /> Nuevo Gasto
+          </button>
+          <button onClick={exportarExcel} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-5 py-3 rounded-xl font-bold transition-colors border border-slate-700">
             <FileText size={18} /> Exportar Excel
           </button>
-          <button className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-5 py-3 rounded-xl font-bold transition-colors shadow-[0_0_20px_rgba(37,99,235,0.3)]">
+          <button onClick={generarPDF} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-5 py-3 rounded-xl font-bold transition-colors shadow-[0_0_20px_rgba(37,99,235,0.3)]">
             <Download size={18} /> Generar PDF
           </button>
         </div>
@@ -174,7 +278,6 @@ export default function DashboardTijuana() {
                       <td className="px-6 py-5 text-slate-400">{g.registrado_por}</td>
                       <td className="px-6 py-5 text-right font-black text-white text-lg">${Number(g.monto).toLocaleString('es-MX')}</td>
                       
-                      {/* Visualizador de Ticket */}
                       <td className="px-6 py-5 text-center">
                         {g.evidencia_url ? (
                           <a href={g.evidencia_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 bg-blue-500/10 px-3 py-1.5 rounded-lg font-bold text-xs transition-colors">
@@ -185,14 +288,13 @@ export default function DashboardTijuana() {
                         )}
                       </td>
 
-                      {/* Estatus y Aprobación */}
                       <td className="px-8 py-5 text-center">
                         {g.estatus === 'Aprobado' ? (
                           <span className="flex items-center justify-center gap-1 text-emerald-500 font-bold text-xs uppercase tracking-widest">
                             <CheckCircle size={14} /> Aprobado
                           </span>
                         ) : (
-                          <button onClick={() => aprobarGasto(g.id)} className="flex items-center justify-center gap-1 bg-blue-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-widest transition-colors w-full shadow-lg">
+                          <button onClick={() => aprobarGasto(g.id)} className="flex items-center justify-center gap-1 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-widest transition-colors w-full shadow-lg">
                             <Clock size={14} /> Aprobar
                           </button>
                         )}
@@ -206,6 +308,55 @@ export default function DashboardTijuana() {
         </div>
 
       </div>
+
+      {/* VENTANA MODAL PARA REGISTRAR NUEVO GASTO DIRECTO */}
+      {mostrarModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-[#0B1221] border border-slate-800 rounded-3xl p-6 w-full max-w-md shadow-2xl relative">
+            <button onClick={() => setMostrarModal(false)} className="absolute top-4 right-4 text-slate-500 hover:text-white transition-colors">
+              <X size={24} />
+            </button>
+            
+            <h2 className="text-xl font-black text-white mb-6">Registrar Nuevo Gasto</h2>
+            
+            <form onSubmit={handleGuardarGasto} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Concepto de la compra</label>
+                <input required type="text" placeholder="Ej. Anticipo albañilería" value={nuevoConcepto} onChange={(e) => setNuevoConcepto(e.target.value)} className="w-full bg-[#070B14] border border-slate-700 p-3 rounded-xl text-slate-200 focus:border-emerald-500 outline-none text-sm" />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Monto ($ MXN)</label>
+                <input required type="number" step="0.01" placeholder="0.00" value={nuevoMonto} onChange={(e) => setNuevoMonto(e.target.value)} className="w-full bg-[#070B14] border border-slate-700 p-3 rounded-xl text-slate-200 focus:border-emerald-500 outline-none font-black text-lg" />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Categoría</label>
+                <select value={nuevaCategoria} onChange={(e) => setNuevaCategoria(e.target.value)} className="w-full bg-[#070B14] border border-slate-700 p-3 rounded-xl text-slate-200 focus:border-emerald-500 outline-none cursor-pointer text-sm font-bold">
+                  <option value="Materiales">Materiales e Insumos</option>
+                  <option value="Albañil">Mano de Obra / Anticipo</option>
+                  <option value="Misceláneas">Misceláneas / Viáticos</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Ticket (Opcional)</label>
+                <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-slate-700 border-dashed rounded-xl cursor-pointer bg-[#070B14] hover:border-emerald-500 transition-colors">
+                  <div className="flex flex-col items-center justify-center text-slate-400">
+                    <Camera size={20} className="mb-1 text-emerald-400" />
+                    <p className="text-[10px] font-bold">{nuevoArchivo ? nuevoArchivo.name : "Subir archivo"}</p>
+                  </div>
+                  <input type="file" accept="image/*" onChange={(e) => setNuevoArchivo(e.target.files?.[0] || null)} className="hidden" />
+                </label>
+              </div>
+
+              <button type="submit" disabled={guardandoGasto} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-3 rounded-xl transition-all mt-6">
+                {guardandoGasto ? "Guardando..." : "GUARDAR GASTO"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
