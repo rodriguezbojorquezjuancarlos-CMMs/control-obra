@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
-import { Wallet, Hammer, Pickaxe, Receipt, Download, FileText, Image as ImageIcon, CheckCircle, Clock, Plus, X, Camera } from "lucide-react"
+import { Wallet, Hammer, Pickaxe, Receipt, Download, FileText, Image as ImageIcon, CheckCircle, Clock, Plus, X, Camera, Trash2, Pencil } from "lucide-react"
 import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -21,8 +21,9 @@ export default function DashboardTijuana() {
     pendientes: 0
   })
 
-  // Estados para la ventana Modal de Nuevo Gasto
+  // Estados para la ventana Modal de Nuevo/Editar Gasto
   const [mostrarModal, setMostrarModal] = useState(false)
+  const [gastoEditando, setGastoEditando] = useState<string | null>(null) // Para saber si editamos
   const [nuevoConcepto, setNuevoConcepto] = useState("")
   const [nuevoMonto, setNuevoMonto] = useState("")
   const [nuevaCategoria, setNuevaCategoria] = useState("Materiales")
@@ -43,7 +44,6 @@ export default function DashboardTijuana() {
     if (data) {
       setGastos(data)
       
-      // Calcular todos los totales para las tarjetas
       let tot = 0, mat = 0, alb = 0, misc = 0, pend = 0;
       
       data.forEach(g => {
@@ -60,7 +60,6 @@ export default function DashboardTijuana() {
     setCargando(false)
   }
 
-  // Aprobar gastos del albañil
   const aprobarGasto = async (id: string) => {
     const { error } = await supabase
       .from("gastos_tijuana")
@@ -70,7 +69,45 @@ export default function DashboardTijuana() {
     if (!error) cargarGastos()
   }
 
-  // Guardar gasto directo de Rafael (Se auto-aprueba)
+  // --- NUEVA FUNCIÓN: ELIMINAR GASTO ---
+  const eliminarGasto = async (id: string) => {
+    const confirmar = window.confirm("¿Estás seguro de que deseas eliminar este gasto? Esta acción no se puede deshacer.")
+    if (!confirmar) return
+
+    try {
+      const { error } = await supabase
+        .from("gastos_tijuana")
+        .delete()
+        .eq("id", id)
+
+      if (error) throw error
+      cargarGastos()
+    } catch (err: any) {
+      alert("Error al eliminar el gasto: " + err.message)
+    }
+  }
+
+  // --- PREPARAR MODAL PARA EDITAR ---
+  const abrirModalEditar = (gasto: any) => {
+    setGastoEditando(gasto.id)
+    setNuevoConcepto(gasto.concepto)
+    setNuevoMonto(gasto.monto.toString())
+    setNuevaCategoria(gasto.categoria)
+    setNuevoArchivo(null)
+    setMostrarModal(true)
+  }
+
+  // --- PREPARAR MODAL PARA NUEVO GASTO ---
+  const abrirModalNuevo = () => {
+    setGastoEditando(null)
+    setNuevoConcepto("")
+    setNuevoMonto("")
+    setNuevaCategoria("Materiales")
+    setNuevoArchivo(null)
+    setMostrarModal(true)
+  }
+
+  // --- GUARDAR O ACTUALIZAR GASTO ---
   const handleGuardarGasto = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!nuevoConcepto || !nuevoMonto) return
@@ -79,9 +116,10 @@ export default function DashboardTijuana() {
     try {
       let evidenciaUrl = null
 
+      // Si subió un archivo nuevo
       if (nuevoArchivo) {
         const nombreArchivo = `${Date.now()}-${nuevoArchivo.name}`
-        const { data: uploadData, error: uploadError } = await supabase.storage
+        const { error: uploadError } = await supabase.storage
           .from("tickets_obra")
           .upload(nombreArchivo, nuevoArchivo)
 
@@ -94,33 +132,47 @@ export default function DashboardTijuana() {
         evidenciaUrl = publicUrlData.publicUrl
       }
 
-      const { error: insertError } = await supabase
-        .from("gastos_tijuana")
-        .insert([{
+      if (gastoEditando) {
+        // ACTUALIZAR GASTO EXISTENTE
+        const datosActualizar: any = {
           concepto: nuevoConcepto,
           monto: parseFloat(nuevoMonto),
           categoria: nuevaCategoria,
-          evidencia_url: evidenciaUrl,
-          registrado_por: "Rafael Alvarez",
-          estatus: "Aprobado" // Automáticamente aprobado porque lo sube el dueño
-        }])
+        }
+        if (evidenciaUrl) datosActualizar.evidencia_url = evidenciaUrl // Solo actualiza foto si se subió una nueva
 
-      if (insertError) throw insertError
+        const { error: updateError } = await supabase
+          .from("gastos_tijuana")
+          .update(datosActualizar)
+          .eq("id", gastoEditando)
+
+        if (updateError) throw updateError
+      } else {
+        // INSERTAR NUEVO GASTO
+        const { error: insertError } = await supabase
+          .from("gastos_tijuana")
+          .insert([{
+            concepto: nuevoConcepto,
+            monto: parseFloat(nuevoMonto),
+            categoria: nuevaCategoria,
+            evidencia_url: evidenciaUrl,
+            registrado_por: "Rafael Alvarez",
+            estatus: "Aprobado" 
+          }])
+
+        if (insertError) throw insertError
+      }
 
       setMostrarModal(false)
-      setNuevoConcepto("")
-      setNuevoMonto("")
-      setNuevoArchivo(null)
-      cargarGastos() // Refrescar la tabla
+      cargarGastos() 
 
     } catch (err: any) {
-      alert("Error al registrar: " + err.message)
+      alert("Error al guardar: " + err.message)
     } finally {
       setGuardandoGasto(false)
     }
   }
 
-  // Funciones de Exportación
   const exportarExcel = () => {
     const datosTabla = gastos.map(g => ({
       Fecha: new Date(g.fecha).toLocaleDateString('es-MX'),
@@ -154,13 +206,12 @@ export default function DashboardTijuana() {
       body: datosTabla,
       startY: 25,
       theme: 'grid',
-      headStyles: { fillColor: [16, 185, 129] } // Verde esmeralda para el PDF
+      headStyles: { fillColor: [16, 185, 129] } 
     })
     
     doc.save("Control_Financiero_Tijuana.pdf")
   }
 
-  // Porcentajes para la barra visual
   const porcMateriales = metricas.total > 0 ? (metricas.materiales / metricas.total) * 100 : 0
   const porcAlbanil = metricas.total > 0 ? (metricas.albanil / metricas.total) * 100 : 0
   const porcMisc = metricas.total > 0 ? (metricas.miscelaneas / metricas.total) * 100 : 0
@@ -168,7 +219,6 @@ export default function DashboardTijuana() {
   return (
     <div className="min-h-screen bg-[#070B14] text-slate-200 p-4 md:p-8 font-sans pb-24">
       
-      {/* HEADER GERENCIAL */}
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8">
         <div>
           <div className="flex items-center gap-3 mb-1">
@@ -182,7 +232,7 @@ export default function DashboardTijuana() {
         </div>
 
         <div className="flex flex-wrap gap-3 w-full md:w-auto">
-          <button onClick={() => setMostrarModal(true)} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-3 rounded-xl font-bold transition-colors shadow-[0_0_20px_rgba(16,185,129,0.3)]">
+          <button onClick={abrirModalNuevo} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-3 rounded-xl font-bold transition-colors shadow-[0_0_20px_rgba(16,185,129,0.3)]">
             <Plus size={18} /> Nuevo Gasto
           </button>
           <button onClick={exportarExcel} className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-5 py-3 rounded-xl font-bold transition-colors border border-slate-700">
@@ -196,7 +246,6 @@ export default function DashboardTijuana() {
 
       <div className="max-w-7xl mx-auto space-y-6">
         
-        {/* TARJETAS DE MÉTRICAS */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-[#0B1221] border border-slate-800 p-6 rounded-3xl shadow-lg relative overflow-hidden group">
             <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity"><Wallet size={64} /></div>
@@ -224,7 +273,6 @@ export default function DashboardTijuana() {
           </div>
         </div>
 
-        {/* BARRA DE DISTRIBUCIÓN VISUAL */}
         <div className="bg-[#0B1221] border border-slate-800 p-6 rounded-3xl shadow-lg">
           <h3 className="text-white font-bold mb-4 flex items-center gap-2"><Receipt size={18} className="text-slate-400"/> Distribución del Presupuesto</h3>
           <div className="w-full h-4 rounded-full flex overflow-hidden bg-slate-800">
@@ -239,7 +287,6 @@ export default function DashboardTijuana() {
           </div>
         </div>
 
-        {/* TABLA DE GASTOS Y TICKETS */}
         <div className="bg-[#0B1221] border border-slate-800 rounded-3xl shadow-2xl overflow-hidden">
           <div className="p-6 border-b border-slate-800 bg-slate-900/30 flex justify-between items-center">
             <h2 className="text-lg font-black text-white">Historial de Gastos y Comprobantes</h2>
@@ -255,14 +302,15 @@ export default function DashboardTijuana() {
                   <th className="px-6 py-5">Registrado por</th>
                   <th className="px-6 py-5 text-right">Monto</th>
                   <th className="px-6 py-5 text-center">Ticket</th>
-                  <th className="px-8 py-5 text-center">Estatus</th>
+                  <th className="px-6 py-5 text-center">Estatus</th>
+                  <th className="px-6 py-5 text-center">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50 text-slate-300">
                 {cargando ? (
-                  <tr><td colSpan={7} className="p-12 text-center text-blue-400 animate-pulse font-bold">Cargando registros financieros...</td></tr>
+                  <tr><td colSpan={8} className="p-12 text-center text-blue-400 animate-pulse font-bold">Cargando registros financieros...</td></tr>
                 ) : gastos.length === 0 ? (
-                  <tr><td colSpan={7} className="p-12 text-center text-slate-500">No hay gastos registrados aún.</td></tr>
+                  <tr><td colSpan={8} className="p-12 text-center text-slate-500">No hay gastos registrados aún.</td></tr>
                 ) : (
                   gastos.map(g => (
                     <tr key={g.id} className="hover:bg-white/[0.02] transition-colors">
@@ -281,16 +329,16 @@ export default function DashboardTijuana() {
                       <td className="px-6 py-5 text-center">
                         {g.evidencia_url ? (
                           <a href={g.evidencia_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 bg-blue-500/10 px-3 py-1.5 rounded-lg font-bold text-xs transition-colors">
-                            <ImageIcon size={14} /> Ver Ticket
+                            <ImageIcon size={14} /> Ver
                           </a>
                         ) : (
                           <span className="text-slate-600 text-xs font-bold uppercase">Sin Ticket</span>
                         )}
                       </td>
 
-                      <td className="px-8 py-5 text-center">
+                      <td className="px-6 py-5 text-center">
                         {g.estatus === 'Aprobado' ? (
-                          <span className="flex items-center justify-center gap-1 text-emerald-500 font-bold text-xs uppercase tracking-widest">
+                          <span className="inline-flex items-center justify-center gap-1 text-emerald-500 font-bold text-xs uppercase tracking-widest">
                             <CheckCircle size={14} /> Aprobado
                           </span>
                         ) : (
@@ -298,6 +346,18 @@ export default function DashboardTijuana() {
                             <Clock size={14} /> Aprobar
                           </button>
                         )}
+                      </td>
+
+                      {/* COLUMNA DE ACCIONES: EDITAR Y ELIMINAR */}
+                      <td className="px-6 py-5">
+                        <div className="flex items-center justify-center gap-2">
+                          <button onClick={() => abrirModalEditar(g)} className="p-2 text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 rounded-lg transition-colors" title="Editar">
+                            <Pencil size={16} />
+                          </button>
+                          <button onClick={() => eliminarGasto(g.id)} className="p-2 text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 rounded-lg transition-colors" title="Eliminar">
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -309,7 +369,7 @@ export default function DashboardTijuana() {
 
       </div>
 
-      {/* VENTANA MODAL PARA REGISTRAR NUEVO GASTO DIRECTO */}
+      {/* VENTANA MODAL REUTILIZADA PARA NUEVO / EDITAR GASTO */}
       {mostrarModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in">
           <div className="bg-[#0B1221] border border-slate-800 rounded-3xl p-6 w-full max-w-md shadow-2xl relative">
@@ -317,7 +377,9 @@ export default function DashboardTijuana() {
               <X size={24} />
             </button>
             
-            <h2 className="text-xl font-black text-white mb-6">Registrar Nuevo Gasto</h2>
+            <h2 className="text-xl font-black text-white mb-6">
+              {gastoEditando ? "Editar Gasto" : "Registrar Nuevo Gasto"}
+            </h2>
             
             <form onSubmit={handleGuardarGasto} className="space-y-4">
               <div>
@@ -340,7 +402,9 @@ export default function DashboardTijuana() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Ticket (Opcional)</label>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-2">
+                  {gastoEditando ? "Reemplazar Ticket (Opcional)" : "Ticket (Opcional)"}
+                </label>
                 <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-slate-700 border-dashed rounded-xl cursor-pointer bg-[#070B14] hover:border-emerald-500 transition-colors">
                   <div className="flex flex-col items-center justify-center text-slate-400">
                     <Camera size={20} className="mb-1 text-emerald-400" />
@@ -350,8 +414,8 @@ export default function DashboardTijuana() {
                 </label>
               </div>
 
-              <button type="submit" disabled={guardandoGasto} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-3 rounded-xl transition-all mt-6">
-                {guardandoGasto ? "Guardando..." : "GUARDAR GASTO"}
+              <button type="submit" disabled={guardandoGasto} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-3 rounded-xl transition-all mt-6 shadow-[0_0_15px_rgba(37,99,235,0.3)]">
+                {guardandoGasto ? "Guardando..." : (gastoEditando ? "ACTUALIZAR GASTO" : "GUARDAR GASTO")}
               </button>
             </form>
           </div>
